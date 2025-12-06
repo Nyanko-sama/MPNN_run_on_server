@@ -4,7 +4,7 @@ import argparse
 from pathlib import Path
 from typing import Optional
 import tempfile
-from Bio.PDB import MMCIFParser, PDBIO
+from Bio.PDB import MMCIFParser, PDBIO, PDBParser
 
 
 parser = argparse.ArgumentParser()
@@ -38,6 +38,11 @@ def convert_cif_to_pdb(cif_path: Path, pdb_path: Optional[Path] = None, chain_id
         parser = MMCIFParser(QUIET=True)
         structure = parser.get_structure('structure', str(cif_path))
         
+        # Validate input structure has atoms
+        num_atoms = sum(1 for _ in structure.get_atoms())
+        if num_atoms == 0:
+            raise RuntimeError(f"CIF file contains no atoms: {cif_path}")
+        
         io = PDBIO()
         if chain_id:
             # Extract only the specified chain
@@ -56,9 +61,27 @@ def convert_cif_to_pdb(cif_path: Path, pdb_path: Optional[Path] = None, chain_id
             selector = ChainSelector(chain_id)
             io.set_structure(structure)
             io.save(str(pdb_path), select=selector)
+            
+            # Validate extracted structure
+            pdb_parser = PDBParser(QUIET=True)
+            check_structure = pdb_parser.get_structure('check', str(pdb_path))
+            num_atoms_after = sum(1 for _ in check_structure.get_atoms())
+            if num_atoms_after == 0:
+                raise RuntimeError(f"Chain {chain_id} not found or empty in CIF file: {cif_path}")
         else:
             io.set_structure(structure)
             io.save(str(pdb_path))
+            
+            # Validate output PDB file
+            pdb_parser = PDBParser(QUIET=True)
+            check_structure = pdb_parser.get_structure('check', str(pdb_path))
+            num_atoms_after = sum(1 for _ in check_structure.get_atoms())
+            if num_atoms_after == 0:
+                raise RuntimeError(f"Converted PDB file is empty: {pdb_path}")
+        
+        # Validate file exists and is not empty
+        if not pdb_path.exists() or pdb_path.stat().st_size == 0:
+            raise RuntimeError(f"Failed to create valid PDB file: {pdb_path}")
         
         return pdb_path
     except Exception as e:
@@ -113,10 +136,19 @@ def run_proteinmpnn_with_auto_convert(
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Convert CIF to PDB if needed
-    pdb_path = get_pdb_path_for_mpnn(input_path, temp_dir)
-    is_temp_file = (pdb_path != input_path)
-    
     try:
+        pdb_path = get_pdb_path_for_mpnn(input_path, temp_dir)
+        is_temp_file = (pdb_path != input_path)
+        
+        # Validate PDB file before running ProteinMPNN
+        if not pdb_path.exists():
+            print(f"ERROR: PDB file does not exist: {pdb_path}")
+            return False
+        
+        if pdb_path.stat().st_size == 0:
+            print(f"ERROR: PDB file is empty: {pdb_path}")
+            return False
+        
         # Build ProteinMPNN command
         cmd = [
             'python', 'ProteinMPNN/protein_mpnn_run.py',
@@ -126,10 +158,22 @@ def run_proteinmpnn_with_auto_convert(
             '--sampling_temp', temp,
         ]
         
+        print(f"Running ProteinMPNN with PDB: {pdb_path}")
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
+        
+        if result.stdout:
+            print(result.stdout)
+        
         return True
+    except RuntimeError as e:
+        print(f"ERROR: {e}")
+        return False
     except subprocess.CalledProcessError as e:
-        print(f"ERROR running ProteinMPNN: {e.stderr}")
+        print(f"ERROR running ProteinMPNN:")
+        if e.stdout:
+            print(f"STDOUT: {e.stdout}")
+        if e.stderr:
+            print(f"STDERR: {e.stderr}")
         return False
     finally:
         # Clean up temporary PDB file if we created one
@@ -164,7 +208,9 @@ def main():
                     for temp in args.temps: 
                         print(f"Running for {protein_folder} {cif_file.stem} temp={temp}")
                         output_path = Path(args.output_folder) / protein_folder / cif_file.stem / f"temp_{temp}"
-                        run_proteinmpnn_with_auto_convert(cif_file, output_path, args.n_designs, str(temp))
+                        # Create temp_dir in output folder for debugging (files kept for inspection)
+                        temp_dir = output_path.parent / "temp_pdb"
+                        run_proteinmpnn_with_auto_convert(cif_file, output_path, args.n_designs, str(temp), temp_dir=temp_dir, cleanup=False)
                 break  # Only process first protein in test mode
 
     else:
@@ -186,7 +232,9 @@ def main():
                     for temp in args.temps: 
                         print(f"Running for {protein_folder} {cif_file.stem} temp={temp}")
                         output_path = Path(args.output_folder) / protein_folder / cif_file.stem / f"temp_{temp}"
-                        run_proteinmpnn_with_auto_convert(cif_file, output_path, args.n_designs, str(temp))
+                        # Create temp_dir in output folder for debugging (files kept for inspection)
+                        temp_dir = output_path.parent / "temp_pdb"
+                        run_proteinmpnn_with_auto_convert(cif_file, output_path, args.n_designs, str(temp), temp_dir=temp_dir, cleanup=False)
 
 
 if __name__ == "__main__":
