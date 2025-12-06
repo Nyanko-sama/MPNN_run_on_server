@@ -84,9 +84,7 @@ def get_pdb_path_for_mpnn(input_path: Path, temp_dir: Optional[Path] = None) -> 
         else:
             pdb_path = None  # Will create temp file
         #get chain id from cif file name, example: cndt_1ib1E_aligned_to_1kuvA_0.fa -> protein and chain id is 1ib1E -> chain id is E 
-        chain_id = input_path.stem.split("_")[1][-1] if len(input_path.stem.split("_")) > 1 else None
-        print(f"Chain id: {chain_id}")
-        return convert_cif_to_pdb(input_path, pdb_path, chain_id=chain_id)
+        return convert_cif_to_pdb(input_path, pdb_path)
     else:
         raise ValueError(f"Unsupported file format: {input_path.suffix}. Expected .pdb or .cif")
 
