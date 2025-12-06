@@ -13,6 +13,7 @@ parser.add_argument("--input_folder", type=str, default="protein_conformations")
 parser.add_argument("--output_folder", type=str, default="out")
 parser.add_argument("--temps", type=str, default="0.1,0.2,0.3")
 parser.add_argument("--n_designs", type=int, default=1000)
+parser.add_argument("--ca_only", action='store_true', default=False, help="Use CA-only mode (may help with structure issues)")
 
 args = parser.parse_args()
 # Parse temps from comma-separated string
@@ -38,10 +39,18 @@ def convert_cif_to_pdb(cif_path: Path, pdb_path: Optional[Path] = None, chain_id
         parser = MMCIFParser(QUIET=True)
         structure = parser.get_structure('structure', str(cif_path))
         
+        # Get first model only (BioPython structures can have multiple models)
+        if len(list(structure.get_models())) == 0:
+            raise RuntimeError(f"CIF file contains no models: {cif_path}")
+        
+        first_model = list(structure.get_models())[0]
+        
         # Validate input structure has atoms
         num_atoms = sum(1 for _ in structure.get_atoms())
+        num_residues = sum(1 for _ in structure.get_residues())
         if num_atoms == 0:
             raise RuntimeError(f"CIF file contains no atoms: {cif_path}")
+        print(f"Converting CIF: {num_residues} residues, {num_atoms} atoms")
         
         io = PDBIO()
         if chain_id:
@@ -50,7 +59,7 @@ def convert_cif_to_pdb(cif_path: Path, pdb_path: Optional[Path] = None, chain_id
                 def __init__(self, chain_id):
                     self.chain_id = chain_id
                 def accept_model(self, model):
-                    return 1
+                    return model == first_model
                 def accept_chain(self, chain):
                     return chain.id == self.chain_id
                 def accept_residue(self, residue):
@@ -66,18 +75,34 @@ def convert_cif_to_pdb(cif_path: Path, pdb_path: Optional[Path] = None, chain_id
             pdb_parser = PDBParser(QUIET=True)
             check_structure = pdb_parser.get_structure('check', str(pdb_path))
             num_atoms_after = sum(1 for _ in check_structure.get_atoms())
+            num_residues_after = sum(1 for _ in check_structure.get_residues())
             if num_atoms_after == 0:
                 raise RuntimeError(f"Chain {chain_id} not found or empty in CIF file: {cif_path}")
+            print(f"Converted PDB: {num_residues_after} residues, {num_atoms_after} atoms")
         else:
+            # Save only first model
+            class ModelSelector:
+                def accept_model(self, model):
+                    return model == first_model
+                def accept_chain(self, chain):
+                    return 1
+                def accept_residue(self, residue):
+                    return 1
+                def accept_atom(self, atom):
+                    return 1
+            
+            selector = ModelSelector()
             io.set_structure(structure)
-            io.save(str(pdb_path))
+            io.save(str(pdb_path), select=selector)
             
             # Validate output PDB file
             pdb_parser = PDBParser(QUIET=True)
             check_structure = pdb_parser.get_structure('check', str(pdb_path))
             num_atoms_after = sum(1 for _ in check_structure.get_atoms())
+            num_residues_after = sum(1 for _ in check_structure.get_residues())
             if num_atoms_after == 0:
                 raise RuntimeError(f"Converted PDB file is empty: {pdb_path}")
+            print(f"Converted PDB: {num_residues_after} residues, {num_atoms_after} atoms")
         
         # Validate file exists and is not empty
         if not pdb_path.exists() or pdb_path.stat().st_size == 0:
@@ -157,6 +182,8 @@ def run_proteinmpnn_with_auto_convert(
             '--num_seq_per_target', str(num_seq),
             '--sampling_temp', temp,
         ]
+        if args.ca_only:
+            cmd.append('--ca_only')
         
         print(f"Running ProteinMPNN with PDB: {pdb_path}")
         result = subprocess.run(cmd, check=True, capture_output=True, text=True)
