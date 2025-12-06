@@ -8,13 +8,15 @@ from Bio.PDB import MMCIFParser, PDBIO
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--test_run", type=bool, default=False)
+parser.add_argument("--test_run", action='store_true', default=False)
 parser.add_argument("--input_folder", type=str, default="protein_conformations")
 parser.add_argument("--output_folder", type=str, default="out")
-parser.add_argument("--temps", type=list, default=[0.1, 0.2, 0.3])
+parser.add_argument("--temps", type=str, default="0.1,0.2,0.3")
 parser.add_argument("--n_designs", type=int, default=1000)
 
-args = parser.parse_args() 
+args = parser.parse_args()
+# Parse temps from comma-separated string
+args.temps = [float(t.strip()) for t in args.temps.split(',')] 
 
 def convert_cif_to_pdb(cif_path: Path, pdb_path: Optional[Path] = None, chain_id: Optional[str] = None) -> Path:
     """
@@ -143,35 +145,50 @@ def run_proteinmpnn_with_auto_convert(
 
 # Main 
 def main():
-    args = parser.parse_args()
     if args.test_run:
         print("Running in test mode")
-        # run only for 1 conformation from protein_conformations folder (the conformation is in subfolder)
+        # run only for 1 conformation from protein_conformations folder
+        input_path_obj = Path(args.input_folder)
+        if not input_path_obj.exists():
+            print(f"ERROR: Input folder does not exist: {args.input_folder}")
+            return
+        
         for protein_folder in os.listdir(args.input_folder):
-            if os.path.isdir(os.path.join(args.input_folder, protein_folder)):
-                for conformation_folder in os.listdir(os.path.join(args.input_folder, protein_folder)):
-                    if os.path.isdir(os.path.join(args.input_folder, protein_folder, conformation_folder)):
-                        for temp in args.temps: 
-                            print(f"Running for {protein_folder} {conformation_folder} {temp}")
-                            input_path = Path(os.path.join(args.input_folder, protein_folder, conformation_folder))
-                            output_path = Path(os.path.join(args.output_folder, protein_folder, conformation_folder, f"temp_{temp}"))
-                            run_proteinmpnn_with_auto_convert(input_path, output_path, args.n_designs, str(temp))
-                        break
-                break
+            protein_path = Path(args.input_folder) / protein_folder
+            if protein_path.is_dir():
+                print(f"Processing protein folder: {protein_folder}")
+                # Find CIF files in this protein folder
+                cif_files = list(protein_path.glob("*.cif"))
+                if cif_files:
+                    # Process only the first CIF file in test mode
+                    cif_file = cif_files[0]
+                    print(f"Processing conformation file: {cif_file.name}")
+                    for temp in args.temps: 
+                        print(f"Running for {protein_folder} {cif_file.stem} temp={temp}")
+                        output_path = Path(args.output_folder) / protein_folder / cif_file.stem / f"temp_{temp}"
+                        run_proteinmpnn_with_auto_convert(cif_file, output_path, args.n_designs, str(temp))
+                break  # Only process first protein in test mode
 
     else:
         print("Running in full mode")
         # run for all conformations in protein_conformations folder
+        input_path_obj = Path(args.input_folder)
+        if not input_path_obj.exists():
+            print(f"ERROR: Input folder does not exist: {args.input_folder}")
+            return
+        
         for protein_folder in os.listdir(args.input_folder):
-            if os.path.isdir(os.path.join(args.input_folder, protein_folder)):
-                for conformation_folder in os.listdir(os.path.join(args.input_folder, protein_folder)):
-                    if os.path.isdir(os.path.join(args.input_folder, protein_folder, conformation_folder)):
-                        for temp in args.temps: 
-                            print(f"Running for {protein_folder} {conformation_folder} {temp}")
-                            input_path = Path(os.path.join(args.input_folder, protein_folder, conformation_folder))
-                            output_path = Path(os.path.join(args.output_folder, protein_folder, conformation_folder, f"temp_{temp}"))
-                            
-                            run_proteinmpnn_with_auto_convert(input_path, output_path, args.n_designs, str(temp))
+            protein_path = Path(args.input_folder) / protein_folder
+            if protein_path.is_dir():
+                print(f"Processing protein folder: {protein_folder}")
+                # Find all CIF files in this protein folder
+                cif_files = list(protein_path.glob("*.cif"))
+                for cif_file in cif_files:
+                    print(f"Processing conformation file: {cif_file.name}")
+                    for temp in args.temps: 
+                        print(f"Running for {protein_folder} {cif_file.stem} temp={temp}")
+                        output_path = Path(args.output_folder) / protein_folder / cif_file.stem / f"temp_{temp}"
+                        run_proteinmpnn_with_auto_convert(cif_file, output_path, args.n_designs, str(temp))
 
 
 if __name__ == "__main__":
